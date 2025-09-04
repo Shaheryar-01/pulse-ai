@@ -8,23 +8,37 @@ interface Message {
   timestamp: string
 }
 
+interface ConversationHistoryItem {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+}
+
+interface ApiResponse {
+  message?: string
+  response?: string
+  data?: {
+    message?: string
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hello! I'm Pulse AI, your Avanza internal assistant. How can I help you today?",
+      content: "Hello! I'm Pulse AI, your Avanza assistant for HR and Infrastructure Services. I can help with employee policies, leave management, IT support, system access, and technical procedures. How can I help you today?",
       timestamp: new Date().toISOString()
     }
   ])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [conversationHistory, setConversationHistory] = useState<any[]>([])
+  const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([])
   
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastMessageRef = useRef<HTMLDivElement>(null)
   
-  const webhookUrl = 'https://26450f575c4a.ngrok-free.app/webhook/avanza-hr-chat'
+  const webhookUrl = process.env.NEXT_PUBLIC_WEBHOOK_URL || 'https://26450f575c4a.ngrok-free.app/webhook/avanza-hr-chat'
 
   const scrollToLastMessage = () => {
     if (messagesContainerRef.current) {
@@ -64,11 +78,11 @@ export default function Home() {
     })
   }
 
-  const extractResponse = (result: any): string => {
+  const extractResponse = (result: ApiResponse | string): string => {
+    if (typeof result === 'string') return result
     if (result.message) return result.message
     if (result.response) return result.response
     if (result.data?.message) return result.data.message
-    if (typeof result === 'string') return result
     return 'I received your message but had trouble formatting a response. Please try again.'
   }
 
@@ -109,7 +123,7 @@ export default function Home() {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const result = await response.json()
+      const result: ApiResponse = await response.json()
       const aiResponse = extractResponse(result)
       
       const aiMessage: Message = {
@@ -120,7 +134,7 @@ export default function Home() {
       
       setMessages(prev => [...prev, aiMessage])
       
-      const newHistory = [
+      const newHistory: ConversationHistoryItem[] = [
         ...conversationHistory,
         { role: 'user', content: message, timestamp: userMessage.timestamp },
         { role: 'assistant', content: aiResponse, timestamp: aiMessage.timestamp }
@@ -128,13 +142,15 @@ export default function Home() {
       
       setConversationHistory(newHistory.slice(-20))
       
-    } catch (error: any) {
+    } catch (error: unknown) {
       let errorMessage = 'Unable to connect to Pulse. Please try again.'
       
-      if (error.name === 'AbortError') {
-        errorMessage = 'Request timed out. Please try again.'
-      } else if (error.message) {
-        errorMessage = `Unable to connect to Pulse: ${error.message}`
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          errorMessage = 'Request timed out. Please try again.'
+        } else if (error.message) {
+          errorMessage = `Unable to connect to Pulse: ${error.message}`
+        }
       }
       
       const errorMsg: Message = {
@@ -175,7 +191,7 @@ export default function Home() {
   )
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-gray-100 flex flex-col font-sans overflow-x-hidden">
       {/* Background Pattern */}
       <div 
         className="fixed inset-0 opacity-40 pointer-events-none bg-repeat z-0"
@@ -189,6 +205,7 @@ export default function Home() {
       <header className="fixed top-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between shadow-sm h-16">
         <div className="flex items-center gap-4">
           <div className="w-20 sm:w-24 md:w-28 lg:w-32 flex items-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img 
               src="/avanza_solutions.png" 
               alt="Avanza Solutions" 
@@ -196,7 +213,9 @@ export default function Home() {
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
                 target.style.display = 'none';
-                target.nextElementSibling!.classList.remove('hidden');
+                if (target.nextElementSibling) {
+                  target.nextElementSibling.classList.remove('hidden');
+                }
               }}
             />
             <div className="text-pink-600 text-lg sm:text-xl md:text-2xl font-bold hidden">avanza</div>
@@ -210,12 +229,12 @@ export default function Home() {
       </header>
 
       {/* Chat Container - Full Width */}
-      <div className="flex-1 flex flex-col px-6 mt-16 overflow-hidden h-screen relative z-10">
+      <div className="flex-1 flex flex-col px-4 sm:px-6 mt-16 overflow-hidden h-screen relative z-10">
         
         {/* Messages Container - Auto-hide Scrollbar */}
         <div 
           ref={messagesContainerRef}
-          className="flex-1 py-4 overflow-y-auto flex flex-col gap-4 relative z-10"
+          className="flex-1 py-4 overflow-y-auto overflow-x-hidden flex flex-col gap-4 relative z-10"
           style={{
             maxHeight: 'calc(100vh - 160px)',
             minHeight: '400px',
@@ -244,7 +263,7 @@ export default function Home() {
             }
           `}</style>
 
-          <div className="max-w-5xl mx-auto w-full flex flex-col gap-4">
+          <div className="max-w-5xl mx-auto w-full flex flex-col gap-4 overflow-x-hidden">
             {messages.map((message, index) => {
               const isLastMessage = index === messages.length - 1
               
@@ -252,37 +271,50 @@ export default function Home() {
                 <div
                   key={index}
                   ref={isLastMessage ? lastMessageRef : null}
-                  className={`flex items-start gap-3 relative z-10 ${
+                  className={`flex items-start relative z-10 overflow-x-hidden ${
                     message.role === 'user' 
-                      ? 'self-end flex-row-reverse max-w-[70%]' 
-                      : 'self-start max-w-[85%]'
+                      ? 'self-end max-w-[95%] sm:max-w-[70%]' 
+                      : 'self-start gap-3 max-w-[95%] sm:max-w-[85%]'
                   }`}
                 >
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 relative z-10 ${
-                    message.role === 'user' 
-                      ? 'bg-pink-600 text-white' 
-                      : 'bg-gray-600 text-white'
-                  }`}>
-                    {message.role === 'user' ? 'You' : 'P'}
-                  </div>
-                  <div className="flex flex-col relative z-10">
+                  {message.role === 'assistant' && (
+                    <div className="w-8 h-8 rounded-full bg-gray-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0 relative z-10">
+                      P
+                    </div>
+                  )}
+                  <div className="flex flex-col relative z-10 min-w-0 flex-1">
                     <div 
-                      className={`px-5 py-4 rounded-[18px] shadow-sm break-words leading-relaxed relative z-10 ${
+                      className={`px-3 sm:px-5 py-4 rounded-[18px] shadow-sm leading-relaxed relative z-10 min-w-0 ${
                         message.role === 'user' 
                           ? 'bg-pink-600 text-white border border-pink-600' 
                           : 'bg-white text-black border border-gray-100'
                       }`}
                       style={{
                         backgroundColor: message.role === 'user' ? '#db2777' : '#ffffff',
-                        position: 'relative'
+                        position: 'relative',
+                        wordWrap: 'break-word',
+                        overflowWrap: 'break-word',
+                        wordBreak: 'break-word',
+                        hyphens: 'auto',
+                        maxWidth: '100%'
                       }}
                     >
-                      {message.content.split('\n').map((line, i) => (
-                        <span key={i}>
-                          {line}
-                          {i < message.content.split('\n').length - 1 && <br />}
-                        </span>
-                      ))}
+                      <div
+                        style={{
+                          wordWrap: 'break-word',
+                          overflowWrap: 'break-word',
+                          wordBreak: 'break-word',
+                          whiteSpace: 'pre-wrap',
+                          maxWidth: '100%'
+                        }}
+                      >
+                        {message.content.split('\n').map((line, i) => (
+                          <span key={i} style={{ display: 'block', maxWidth: '100%' }}>
+                            {line}
+                            {i < message.content.split('\n').length - 1 && <br />}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                     <div className={`text-xs text-gray-500 mt-2 relative z-10 ${
                       message.role === 'user' ? 'text-right' : 'text-left'
@@ -307,7 +339,7 @@ export default function Home() {
       </div>
 
       {/* Input Container - Full Width */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-sm p-6 border-t border-gray-200/50 shadow-lg">
+      <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-sm p-4 sm:p-6 border-t border-gray-200/50 shadow-lg">
         <div className="max-w-5xl mx-auto">
           <div className="flex items-center bg-gray-50/90 backdrop-blur-sm border border-gray-200 rounded-full px-4 py-3 gap-4 transition-colors focus-within:border-pink-600">
             <textarea
