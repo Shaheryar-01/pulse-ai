@@ -38,7 +38,7 @@ export default function Home() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastMessageRef = useRef<HTMLDivElement>(null)
   
-  const webhookUrl = process.env.NEXT_PUBLIC_WEBHOOK_URL || 'https://26450f575c4a.ngrok-free.app/webhook/avanza-hr-chat'
+  const webhookUrl = process.env.NEXT_PUBLIC_WEBHOOK_URL || 'https://7af7f64339e8.ngrok-free.app/webhook/avanza-hr-chat'
 
   const scrollToLastMessage = () => {
     if (messagesContainerRef.current) {
