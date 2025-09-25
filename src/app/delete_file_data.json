@@ -1,0 +1,13 @@
+{
+  "parameters": {
+    "path": "delete-file-data",
+    "method": "POST",
+    "responseMode": "onReceived",
+    "options": {}
+  },
+  "id": "900",
+  "name": "Webhook - Delete File Data",
+  "type": "n8n-nodes-base.webhook",
+  "typeVersion": 1,
+  "position": [300, 1000]
+}

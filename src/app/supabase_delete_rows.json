@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "operation": "executeQuery",
+    "query": "DELETE FROM revenue_data WHERE file_id = {{$json[\"file_id\"]}};"
+  },
+  "id": "901",
+  "name": "Supabase - Delete Rows",
+  "type": "n8n-nodes-base.supabase",
+  "typeVersion": 1,
+  "position": [600, 1000],
+  "credentials": {
+    "supabaseApi": "Supabase Account"
+  }
+}

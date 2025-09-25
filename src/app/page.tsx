@@ -17,30 +17,48 @@ interface ConversationHistoryItem {
 interface ApiResponse {
   message?: string
   response?: string
+  output?: string
   data?: {
     message?: string
   }
+}
+
+interface UploadedFile {
+  name: string
+  size: number
+  uploadDate: string
+  status: 'uploaded' | 'processing' | 'ready'
 }
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hello! I'm Pulse AI, your Avanza assistant for HR and Infrastructure Services. I can help with employee policies, leave management, IT support, system access, and technical procedures. How can I help you today?",
+      content: "Hello! I'm **Pulse AI**, your Avanza Solutions assistant. \nI can help you with:\n\n**Revenue Analysis:**\n• Upload Excel files for financial analysis\n• Revenue trends and performance metrics\n• Bilingual support (English & Roman Urdu)\n\nHow can I assist you today?",
       timestamp: new Date().toISOString()
     }
   ])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([])
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const [isUploading, setIsUploading] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastMessageRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const sidebarFileInputRef = useRef<HTMLInputElement>(null)
   
-  const webhookUrl = process.env.NEXT_PUBLIC_WEBHOOK_URL || 'https://7af7f64339e8.ngrok-free.app/webhook/avanza-hr-chat'
+  // n8n workflow URLs - update these to match your n8n instance
+// Update the webhook URLs to use environment variables
+  const chatWebhookUrl =  'http://localhost:8000/webhook/chat'
+  const uploadWebhookUrl = 'http://localhost:8000/webhook/upload'
 
-  const scrollToLastMessage = () => {
+  // Simple, reliable scrolling
+  const scrollToBottom = () => {
     if (messagesContainerRef.current) {
       const container = messagesContainerRef.current
       container.scrollTop = container.scrollHeight
@@ -48,12 +66,19 @@ export default function Home() {
   }
 
   useEffect(() => {
-    setTimeout(scrollToLastMessage, 50)
+    if (messages.length > 0) {
+      // Strategic scrolling attempts
+      scrollToBottom()
+      setTimeout(scrollToBottom, 50)
+      setTimeout(scrollToBottom, 150)
+      setTimeout(scrollToBottom, 300)
+    }
   }, [messages])
 
   useEffect(() => {
     if (isLoading) {
-      scrollToLastMessage()
+      const interval = setInterval(scrollToBottom, 200)
+      return () => clearInterval(interval)
     }
   }, [isLoading])
 
@@ -78,99 +103,250 @@ export default function Home() {
     })
   }
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
   const extractResponse = (result: ApiResponse | string): string => {
     if (typeof result === 'string') return result
     if (result.message) return result.message
     if (result.response) return result.response
+    if (result.output) return result.output
     if (result.data?.message) return result.data.message
     return 'I received your message but had trouble formatting a response. Please try again.'
   }
 
-  const sendMessage = async () => {
-    const message = inputValue.trim()
-    if (!message || isLoading) return
+// Updated UploadedFile interface - add this to your interfaces section
+interface UploadedFile {
+  name: string
+  size: number
+  uploadDate: string
+  status: 'uploaded' | 'processing' | 'ready'
+  upload_id?: string // Add this field to store the backend upload ID
+}
 
-    try {
-      const userMessage: Message = {
-        role: 'user',
-        content: message,
-        timestamp: new Date().toISOString()
+// Updated handleFileUpload function
+const handleFileUpload = async (files: FileList) => {
+  if (!files || files.length === 0) return
+
+  const file = files[0]
+  if (!file.name.match(/\.(xlsx|xls)$/i)) {
+    const errorMsg: Message = {
+      role: 'assistant',
+      content: 'Please upload an Excel file (.xlsx or .xls format) for revenue analysis. / برا کرم revenue analysis کے لیے Excel فائل اپ لوڈ کریں (.xlsx یا .xls format)',
+      timestamp: new Date().toISOString()
+    }
+    setMessages(prev => [...prev, errorMsg])
+    return
+  }
+
+  setIsUploading(true)
+  
+  try {
+    // Create FormData for FastAPI backend
+    const formData = new FormData()
+    formData.append('file', file) // FastAPI expects 'file' parameter
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 120000) // 2 minutes timeout
+
+    const response = await fetch(uploadWebhookUrl, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    console.log('Upload result:', result) // For debugging
+    
+    const newFile: UploadedFile = {
+      name: file.name,
+      size: file.size,
+      uploadDate: new Date().toISOString(),
+      status: 'ready',
+      upload_id: result.upload_id // Store the upload_id from backend
+    }
+    
+    setUploadedFiles(prev => [...prev, newFile])
+    
+    const successMsg: Message = {
+      role: 'assistant',
+      content: `Perfect! I've successfully processed your Excel file "${file.name}" for revenue analysis. You can now ask me questions in **English** or **Roman Urdu**.\n\nWhat would you like to explore first?`,
+      timestamp: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, successMsg])
+    
+  } catch (error: unknown) {
+    let errorMessage = 'Failed to upload file. Please try again. / فائل اپ لوڈ نہیں ہو سکی۔ برا کرم دوبارہ کوشش کریں۔'
+    
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        errorMessage = 'Upload timed out. Please try again. / اپ لوڈ کا وقت ختم ہو گیا۔ برا کرم دوبارہ کوشش کریں۔'
+      } else if (error.message) {
+        errorMessage = `Upload failed: ${error.message}`
       }
-      
-      setMessages(prev => [...prev, userMessage])
-      setInputValue('')
-      setIsLoading(true)
+    }
+    
+    const errorMsg: Message = {
+      role: 'assistant',
+      content: errorMessage,
+      timestamp: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, errorMsg])
+  } finally {
+    setIsUploading(false)
+  }
+}
 
-      const requestData = {
-        message,
-        conversation_history: conversationHistory,
-        timestamp: new Date().toISOString()
-      }
 
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 30000)
 
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestData),
-        signal: controller.signal
-      })
 
-      clearTimeout(timeoutId)
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(true)
+  }
 
-      const result: ApiResponse = await response.json()
-      const aiResponse = extractResponse(result)
-      
-      const aiMessage: Message = {
-        role: 'assistant',
-        content: aiResponse,
-        timestamp: new Date().toISOString()
-      }
-      
-      setMessages(prev => [...prev, aiMessage])
-      
-      const newHistory: ConversationHistoryItem[] = [
-        ...conversationHistory,
-        { role: 'user', content: message, timestamp: userMessage.timestamp },
-        { role: 'assistant', content: aiResponse, timestamp: aiMessage.timestamp }
-      ]
-      
-      setConversationHistory(newHistory.slice(-20))
-      
-    } catch (error: unknown) {
-      let errorMessage = 'Unable to connect to Pulse. Please try again.'
-      
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          errorMessage = 'Request timed out. Please try again.'
-        } else if (error.message) {
-          errorMessage = `Unable to connect to Pulse: ${error.message}`
-        }
-      }
-      
-      const errorMsg: Message = {
-        role: 'assistant',
-        content: errorMessage,
-        timestamp: new Date().toISOString()
-      }
-      
-      setMessages(prev => [...prev, errorMsg])
-    } finally {
-      setIsLoading(false)
-      
-      // Always refocus the input after any response (success or error)
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.focus()
-        }
-      }, 150)
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    const files = e.dataTransfer.files
+    if (files) {
+      handleFileUpload(files)
     }
   }
+
+  const removeFile = (index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+  }
+
+  
+// Updated sendMessage function
+const sendMessage = async () => {
+  const message = inputValue.trim()
+  if (!message || isLoading) return
+
+  // Check if we have an uploaded file with upload_id
+  const currentFile = uploadedFiles.find(f => f.upload_id)
+  if (!currentFile?.upload_id) {
+    const errorMsg: Message = {
+      role: 'assistant',
+      content: 'Please upload an Excel file first before asking questions. / پہلے Excel فائل اپ لوڈ کریں پھر سوالات پوچھیں۔',
+      timestamp: new Date().toISOString()
+    }
+    setMessages(prev => [...prev, errorMsg])
+    return
+  }
+
+  try {
+    const userMessage: Message = {
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, userMessage])
+    setInputValue('')
+    setIsLoading(true)
+
+    // Format the request for FastAPI backend
+    const requestData = {
+      message: message,
+      timestamp: new Date().toISOString()
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 45000) // 45 seconds timeout
+
+    // Use the upload_id from the uploaded file
+    const response = await fetch(`${chatWebhookUrl}/${currentFile.upload_id}`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestData),
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    console.log('Chat result:', result) // For debugging
+    
+    // Extract response from FastAPI backend
+    const aiResponse = result.response || result.message || 'I received your message but had trouble formatting a response. Please try again.'
+    
+    const aiMessage: Message = {
+      role: 'assistant',
+      content: aiResponse,
+      timestamp: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, aiMessage])
+    
+    // Update conversation history
+    const newHistory: ConversationHistoryItem[] = [
+      ...conversationHistory,
+      { role: 'user', content: message, timestamp: userMessage.timestamp },
+      { role: 'assistant', content: aiResponse, timestamp: aiMessage.timestamp }
+    ]
+    
+    setConversationHistory(newHistory.slice(-20)) // Keep last 20 exchanges
+    
+  } catch (error: unknown) {
+    let errorMessage = 'Unable to connect to Pulse AI. Please try again. / Pulse AI سے رابطہ نہیں ہو سکا۔ برا کرم دوبارہ کوشش کریں۔'
+    
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timed out. Please try again. / درخواست کا وقت ختم ہو گیا۔ برا کرم دوبارہ کوشش کریں۔'
+      } else if (error.message) {
+        errorMessage = `Unable to connect to Pulse AI: ${error.message}`
+      }
+    }
+    
+    const errorMsg: Message = {
+      role: 'assistant',
+      content: errorMessage,
+      timestamp: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, errorMsg])
+  } finally {
+    setIsLoading(false)
+    
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+      }
+    }, 150)
+  }
+}
+
+
+
+
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -179,13 +355,28 @@ export default function Home() {
     }
   }
 
+  const renderMessageContent = (content: string) => {
+    // Enhanced markdown-like formatting with better support for multilingual content
+    const formattedContent = content
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/•/g, '•') // Ensure bullet points render correctly
+      .split('\n').map((line, i) => (
+        <span key={i}>
+          <span dangerouslySetInnerHTML={{ __html: line }} />
+          {i < content.split('\n').length - 1 && <br />}
+        </span>
+      ))
+    
+    return formattedContent
+  }
+
   const TypingIndicator = () => (
     <div className="flex items-start gap-3 max-w-[75%] self-start">
       <div className="w-8 h-8 rounded-full bg-gray-600 text-white flex items-center justify-center text-xs font-semibold flex-shrink-0">
         P
       </div>
-      <div className="px-5 py-4 rounded-[18px] shadow-sm border border-gray-100 bg-white relative z-10"
-           style={{ backgroundColor: '#ffffff' }}>
+      <div className="px-5 py-4 rounded-[18px] shadow-sm border border-gray-100 bg-white">
         <div className="flex items-center gap-2">
           <div className="flex gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce"></span>
@@ -198,7 +389,12 @@ export default function Home() {
   )
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
+    <div 
+      className="min-h-screen bg-gray-100 flex font-sans"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* Background Pattern */}
       <div 
         className="fixed inset-0 opacity-40 pointer-events-none bg-repeat z-0"
@@ -208,11 +404,126 @@ export default function Home() {
         }}
       />
       
-      {/* Header */}
+      {/* Sidebar */}
+      <div className={`fixed top-0 left-0 h-full z-30 transform transition-transform duration-300 ease-in-out ${
+        isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}>
+        <div className="w-80 h-full bg-white/95 backdrop-blur-sm shadow-lg border-r border-gray-200">
+          {/* Sidebar Header */}
+          <div className="h-16 px-4 flex items-center justify-between border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-800">Files</h2>
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="w-8 h-8 rounded-full hover:bg-gray-200 flex items-center justify-center transition-colors"
+            >
+              ✕
+            </button>
+          </div>
+          
+          {/* Sidebar Content */}
+          <div className="flex-1 p-4 overflow-y-auto sidebar-scroll" style={{ height: 'calc(100vh - 64px)' }}>
+            {/* Upload Area */}
+            <div 
+              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
+                isDragOver 
+                  ? 'border-pink-600 bg-pink-50' 
+                  : 'border-gray-300 hover:border-pink-400 hover:bg-gray-50'
+              }`}
+              onClick={() => sidebarFileInputRef.current?.click()}
+            >
+              <div className="text-3xl mb-2">📊</div>
+              <p className="text-sm text-gray-600 mb-2">
+                <strong>Upload Excel File</strong>
+              </p>
+              <p className="text-xs text-gray-500">
+                Click here or drag & drop
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                .xlsx, .xls files only
+              </p>
+            </div>
+            
+            <input
+              ref={sidebarFileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+              className="hidden"
+            />
+            
+            {/* Files List */}
+            <div className="mt-6">
+              <h3 className="text-sm font-medium text-gray-700 mb-3">
+                Revenue Files ({uploadedFiles.length})
+              </h3>
+              
+              {uploadedFiles.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <div className="text-2xl mb-2">📁</div>
+                  <p className="text-sm">No files uploaded yet</p>
+                  <p className="text-xs mt-1">Upload an Excel file to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {uploadedFiles.map((file, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-3 border">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="text-lg">📊</div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-gray-800 text-sm truncate">
+                              {file.name}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              {formatFileSize(file.size)} • {formatTime(file.uploadDate)}
+                            </div>
+                            <div className="mt-2">
+                              <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">
+                                Ready for analysis
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeFile(index)}
+                          className="w-6 h-6 rounded-full hover:bg-red-100 flex items-center justify-center text-red-500 text-xs ml-2"
+                          title="Remove file"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/20 z-20"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      
+      {/* Header - Fixed like reference */}
       <header className="fixed top-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between shadow-sm h-16">
         <div className="flex items-center gap-4">
+          {/* Sidebar Toggle */}
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="w-8 h-8 rounded-lg hover:bg-gray-200 flex items-center justify-center transition-colors"
+            title="Toggle files sidebar"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-gray-600">
+              <path d="M3 12h18M3 6h18M3 18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </button>
+          
           <div className="w-20 sm:w-24 md:w-28 lg:w-32 flex items-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img 
               src="/avanza_solutions.png" 
               alt="Avanza Solutions" 
@@ -235,125 +546,121 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Chat Container - Full Width */}
-      <div className="flex-1 flex flex-col px-6 mt-16 overflow-hidden h-screen relative z-10">
+      {/* Main Content with proper margin for fixed header */}
+      <div className="flex-1 flex flex-col h-screen mt-16 no-scrollbar">
         
-        {/* Messages Container - Auto-hide Scrollbar */}
-        <div 
-          ref={messagesContainerRef}
-          className="flex-1 py-4 overflow-y-auto flex flex-col gap-4 relative z-10"
-          style={{
-            maxHeight: 'calc(100vh - 160px)',
-            minHeight: '400px',
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'rgba(156, 163, 175, 0.5) transparent'
-          }}
-        >
-          <style jsx>{`
-            div::-webkit-scrollbar {
-              width: 6px;
-            }
-            div::-webkit-scrollbar-track {
-              background: transparent;
-            }
-            div::-webkit-scrollbar-thumb {
-              background: rgba(156, 163, 175, 0.3);
-              border-radius: 3px;
-              opacity: 0;
-              transition: opacity 0.2s ease;
-            }
-            div:hover::-webkit-scrollbar-thumb {
-              opacity: 1;
-            }
-            div::-webkit-scrollbar-thumb:hover {
-              background: rgba(156, 163, 175, 0.6);
-            }
-          `}</style>
-
-          <div className="max-w-5xl mx-auto w-full flex flex-col gap-4">
-            {messages.map((message, index) => {
-              const isLastMessage = index === messages.length - 1
-              
-              return (
-                <div
-                  key={index}
-                  ref={isLastMessage ? lastMessageRef : null}
-                  className={`flex items-start gap-3 relative z-10 ${
-                    message.role === 'user' 
-                      ? 'self-end flex-row-reverse max-w-[70%]' 
-                      : 'self-start max-w-[85%]'
-                  }`}
-                >
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 relative z-10 ${
-                    message.role === 'user' 
-                      ? 'bg-pink-600 text-white' 
-                      : 'bg-gray-600 text-white'
-                  }`}>
-                    {message.role === 'user' ? 'You' : 'P'}
-                  </div>
-                  <div className="flex flex-col relative z-10">
-                    <div 
-                      className={`px-5 py-4 rounded-[18px] shadow-sm break-words leading-relaxed relative z-10 ${
-                        message.role === 'user' 
-                          ? 'bg-pink-600 text-white border border-pink-600' 
-                          : 'bg-white text-black border border-gray-100'
-                      }`}
-                      style={{
-                        backgroundColor: message.role === 'user' ? '#db2777' : '#ffffff',
-                        position: 'relative'
-                      }}
-                    >
-                      {message.content.split('\n').map((line, i) => (
-                        <span key={i}>
-                          {line}
-                          {i < message.content.split('\n').length - 1 && <br />}
-                        </span>
-                      ))}
-                    </div>
-                    <div className={`text-xs text-gray-500 mt-2 relative z-10 ${
-                      message.role === 'user' ? 'text-right' : 'text-left'
-                    }`}>
-                      {formatTime(message.timestamp)}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-            
-            {/* Typing Indicator */}
-            {isLoading && (
-              <div ref={lastMessageRef} className="relative z-10">
-                <TypingIndicator />
-              </div>
-            )}
-          </div>
+        {/* Chat Container - Like reference */}
+        <div className="flex-1 flex flex-col px-6 relative z-10 min-h-0 overflow-hidden">
           
-          <div className="h-4" />
-        </div>
-      </div>
+          {/* Messages Container - Scrollable with proper spacing and updated scrollbar */}
+          <div 
+            ref={messagesContainerRef}
+            className="flex-1 py-4 overflow-y-auto flex flex-col gap-4 relative z-10 custom-scrollbar"
+            style={{
+              maxHeight: 'calc(100vh - 160px)',
+              minHeight: '400px'
+            }}
+          >
+            <div className="max-w-5xl mx-auto w-full flex flex-col gap-4">
+              
+              {messages.map((message, index) => {
+                const isLastMessage = index === messages.length - 1
+                
+                return (
+                  <div
+                    key={index}
+                    ref={isLastMessage ? lastMessageRef : null}
+                    className={`flex items-start gap-3 relative z-10 ${
+                      message.role === 'user' 
+                        ? 'self-end flex-row-reverse max-w-[70%]' 
+                        : 'self-start max-w-[85%]'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 relative z-10 ${
+                      message.role === 'user' 
+                        ? 'bg-pink-600 text-white' 
+                        : 'bg-gray-600 text-white'
+                    }`}>
+                      {message.role === 'user' ? 'You' : 'P'}
+                    </div>
+                    <div className="flex flex-col relative z-10">
+                      <div 
+                        className={`px-5 py-4 rounded-[18px] shadow-sm break-words leading-relaxed relative z-10 ${
+                          message.role === 'user' 
+                            ? 'bg-pink-600 text-white border border-pink-600' 
+                            : 'bg-white text-black border border-gray-100'
+                        }`}
+                        style={{
+                          backgroundColor: message.role === 'user' ? '#db2777' : '#ffffff'
+                        }}
+                      >
+                        {renderMessageContent(message.content)}
+                      </div>
+                      <div className={`text-xs text-gray-500 mt-2 relative z-10 ${
+                        message.role === 'user' ? 'text-right' : 'text-left'
+                      }`}>
+                        {formatTime(message.timestamp)}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              
+              {/* Typing Indicator */}
+              {isLoading && (
+                <div ref={lastMessageRef} className="relative z-30">
+                  <TypingIndicator />
+                </div>
+              )}
+              
+              <div className="h-4" />
+            </div>
+          </div>
 
-      {/* Input Container - Full Width */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-sm p-6 border-t border-gray-200/50 shadow-lg">
-        <div className="max-w-5xl mx-auto">
-          <div className="flex items-center bg-gray-50/90 backdrop-blur-sm border border-gray-200 rounded-full px-4 py-3 gap-4 transition-colors focus-within:border-pink-600">
-            <textarea
-              ref={textareaRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="How can I help you today?"
-              className="flex-1 border-none bg-transparent outline-none text-base leading-relaxed resize-none min-h-[20px] max-h-[100px] font-sans placeholder-gray-500 text-black"
-              rows={1}
-              maxLength={1000}
-              disabled={isLoading}
-            />
-            <button
-              onClick={sendMessage}
-              disabled={!inputValue.trim() || isLoading}
-              className="w-9 h-9 bg-pink-600 text-white rounded-full flex items-center justify-center hover:bg-pink-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-base"
-            >
-              {isLoading ? '⏳' : '➤'}
-            </button>
+          {/* Input Container - Fixed bottom like reference */}
+          <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-sm p-6 border-t border-gray-200/50 shadow-lg">
+            <div className="max-w-5xl mx-auto">
+              <div className="flex items-center bg-transparent border border-pink-600 rounded-full px-4 py-3 gap-4">
+                <textarea
+                  ref={textareaRef}
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="How can I help you today?"
+                  className="flex-1 border-0 bg-transparent outline-none text-base leading-relaxed resize-none min-h-[20px] max-h-[100px] font-sans placeholder-gray-500 text-black focus:outline-none focus:ring-0"
+                  rows={1}
+                  maxLength={1000}
+                  disabled={isLoading}
+                  style={{ border: 'none', boxShadow: 'none' }}
+                />
+                
+                {/* File Upload Button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className="w-9 h-9 bg-gray-100 text-gray-600 rounded-full flex items-center justify-center hover:bg-gray-200 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-base"
+                  title="Upload Excel file for revenue analysis"
+                >
+                  {isUploading ? '⏳' : '📎'}
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
+                  className="hidden"
+                />
+                
+                {/* Send Button */}
+                <button
+                  onClick={sendMessage}
+                  disabled={!inputValue.trim() || isLoading}
+                  className="w-9 h-9 bg-pink-600 text-white rounded-full flex items-center justify-center hover:bg-pink-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-base"
+                >
+                  {isLoading ? '⏳' : '➤'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

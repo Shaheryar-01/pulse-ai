@@ -1,0 +1,10 @@
+{
+  "parameters": {
+    "responseBody": "File contents deleted successfully for file_id={{$json[\"file_id\"]}}"
+  },
+  "id": "902",
+  "name": "Respond Delete",
+  "type": "n8n-nodes-base.respondToWebhook",
+  "typeVersion": 1,
+  "position": [900, 1000]
+}
