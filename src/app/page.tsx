@@ -23,14 +23,15 @@ interface ApiResponse {
   }
 }
 
-interface UploadedFile {
-  name: string
-  size: number
-  uploadDate: string
-  status: 'uploaded' | 'processing' | 'ready'
-}
+
+
+
+
+
+
 
 export default function Home() {
+  const [isDeletingFile, setIsDeletingFile] = useState<number | null>(null)
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -76,11 +77,23 @@ export default function Home() {
   }, [messages])
 
   useEffect(() => {
-    if (isLoading) {
-      const interval = setInterval(scrollToBottom, 200)
-      return () => clearInterval(interval)
-    }
-  }, [isLoading])
+  if (isLoading) {
+    const interval = setInterval(() => {
+      // Only auto-scroll if user is already near the bottom
+      if (messagesContainerRef.current) {
+        const container = messagesContainerRef.current
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100
+        
+        // Only scroll if user hasn't manually scrolled up
+        if (isNearBottom) {
+          scrollToBottom()
+        }
+      }
+    }, 200)
+    return () => clearInterval(interval)
+  }
+}, [isLoading])
+
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -126,7 +139,7 @@ interface UploadedFile {
   size: number
   uploadDate: string
   status: 'uploaded' | 'processing' | 'ready'
-  upload_id?: string // Add this field to store the backend upload ID
+  upload_id?: string 
 }
 
 // Updated handleFileUpload function
@@ -233,9 +246,76 @@ const handleFileUpload = async (files: FileList) => {
     }
   }
 
-  const removeFile = (index: number) => {
+
+
+// Updated removeFile with loading state
+const removeFile = async (index: number) => {
+  const file = uploadedFiles[index]
+  
+  if (!file.upload_id) {
     setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+    return
   }
+
+  setIsDeletingFile(index)
+
+  try {
+    const response = await fetch(`http://localhost:8000/api/upload/${file.upload_id}`, {
+      method: 'DELETE'
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    
+    // Remove from state
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+    
+    // IMPORTANT: Clear the file input refs
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+    if (sidebarFileInputRef.current) {
+      sidebarFileInputRef.current.value = ''
+    }
+    
+    // Reset messages with SUCCESS message
+    setMessages([
+      {
+        role: 'assistant',
+        content: "Hello! I'm **Pulse AI**, your Avanza Solutions assistant. \nI can help you with:\n\n**Revenue Analysis:**\n• Upload Excel files for financial analysis\n• Revenue trends and performance metrics\n• Bilingual support (English & Roman Urdu)\n\nHow can I assist you today?",
+        timestamp: new Date().toISOString()
+      },
+      {
+        role: 'assistant',
+        content: `File "${file.name}" has been successfully deleted. You can upload a new file to start fresh analysis.`,
+        timestamp: new Date().toISOString()
+      }
+    ])
+    
+    setConversationHistory([])
+    
+    // Close sidebar after deletion
+    setIsSidebarOpen(false)
+
+  } catch (error: unknown) {
+    console.error('Delete error:', error)
+    
+    const errorMsg: Message = {
+      role: 'assistant',
+      content: 'Failed to delete file. Please try again.',
+      timestamp: new Date().toISOString()
+    }
+    setMessages(prev => [...prev, errorMsg])
+  } finally {
+    setIsDeletingFile(null)
+  }
+}
+
+
+
 
   
 // Updated sendMessage function
@@ -485,12 +565,17 @@ const sendMessage = async () => {
                           </div>
                         </div>
                         <button
-                          onClick={() => removeFile(index)}
-                          className="w-6 h-6 rounded-full hover:bg-red-100 flex items-center justify-center text-red-500 text-xs ml-2"
-                          title="Remove file"
-                        >
-                          ✕
-                        </button>
+  onClick={() => removeFile(index)}
+  disabled={isDeletingFile === index}
+  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ml-2 transition-colors ${
+    isDeletingFile === index
+      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+      : 'hover:bg-red-100 text-red-500'
+  }`}
+  title="Remove file"
+>
+  {isDeletingFile === index ? '⏳' : '✕'}
+</button>
                       </div>
                     </div>
                   ))}
