@@ -23,12 +23,13 @@ interface ApiResponse {
   }
 }
 
-
-
-
-
-
-
+interface UploadedFile {
+  name: string
+  size: number
+  uploadDate: string
+  status: 'uploaded' | 'processing' | 'ready'
+  upload_id?: string 
+}
 
 export default function Home() {
   const [isDeletingFile, setIsDeletingFile] = useState<number | null>(null)
@@ -53,10 +54,76 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sidebarFileInputRef = useRef<HTMLInputElement>(null)
   
-  // n8n workflow URLs - update these to match your n8n instance
-// Update the webhook URLs to use environment variables
-  const chatWebhookUrl =  'http://localhost:8000/webhook/chat'
+  // API URLs
+  const chatWebhookUrl = 'http://localhost:8000/webhook/chat'
   const uploadWebhookUrl = 'http://localhost:8000/webhook/upload'
+  const deleteApiUrl = 'http://localhost:8000/api/upload'
+
+  // =============================================================================
+  // 🔥 AUTO-CLEANUP ON PAGE REFRESH/LOAD
+  // =============================================================================
+  useEffect(() => {
+    const cleanupOnPageLoad = async () => {
+      try {
+        // Get stored upload_id from localStorage
+        const storedUploadId = localStorage.getItem('current_upload_id')
+        
+        if (storedUploadId) {
+          console.log('🧹 Cleaning up previous session:', storedUploadId)
+          
+          // Delete the old data from backend
+          try {
+            const response = await fetch(`${deleteApiUrl}/${storedUploadId}`, {
+              method: 'DELETE'
+            })
+            
+            if (response.ok) {
+              console.log('✅ Previous session cleaned up successfully')
+            } else {
+              console.warn('⚠️ Cleanup response not OK:', response.statusText)
+            }
+          } catch (error) {
+            console.warn('⚠️ Cleanup failed (might be expected):', error)
+          }
+          
+          // Clear localStorage
+          localStorage.removeItem('current_upload_id')
+          localStorage.removeItem('uploaded_files')
+          console.log('✅ localStorage cleared')
+        } else {
+          console.log('ℹ️ No previous session to clean up')
+        }
+        
+        // Always clear any leftover localStorage data
+        localStorage.removeItem('current_upload_id')
+        localStorage.removeItem('uploaded_files')
+        
+      } catch (error) {
+        console.error('Error during cleanup:', error)
+      }
+    }
+    
+    // Run cleanup on component mount (page load/refresh)
+    cleanupOnPageLoad()
+    
+    // Optional: Cleanup on page unload (when user leaves)
+    const handleBeforeUnload = async () => {
+      const storedUploadId = localStorage.getItem('current_upload_id')
+      if (storedUploadId) {
+        // Use sendBeacon for reliable cleanup on page unload
+        const blob = new Blob([JSON.stringify({})], { type: 'application/json' })
+        navigator.sendBeacon(`${deleteApiUrl}/${storedUploadId}`, blob)
+      }
+    }
+    
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, []) // Empty dependency array = runs once on mount
+  
+  // =============================================================================
 
   // Simple, reliable scrolling
   const scrollToBottom = () => {
@@ -68,7 +135,6 @@ export default function Home() {
 
   useEffect(() => {
     if (messages.length > 0) {
-      // Strategic scrolling attempts
       scrollToBottom()
       setTimeout(scrollToBottom, 50)
       setTimeout(scrollToBottom, 150)
@@ -77,23 +143,20 @@ export default function Home() {
   }, [messages])
 
   useEffect(() => {
-  if (isLoading) {
-    const interval = setInterval(() => {
-      // Only auto-scroll if user is already near the bottom
-      if (messagesContainerRef.current) {
-        const container = messagesContainerRef.current
-        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100
-        
-        // Only scroll if user hasn't manually scrolled up
-        if (isNearBottom) {
-          scrollToBottom()
+    if (isLoading) {
+      const interval = setInterval(() => {
+        if (messagesContainerRef.current) {
+          const container = messagesContainerRef.current
+          const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100
+          
+          if (isNearBottom) {
+            scrollToBottom()
+          }
         }
-      }
-    }, 200)
-    return () => clearInterval(interval)
-  }
-}, [isLoading])
-
+      }, 200)
+      return () => clearInterval(interval)
+    }
+  }, [isLoading])
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -133,99 +196,92 @@ export default function Home() {
     return 'I received your message but had trouble formatting a response. Please try again.'
   }
 
-// Updated UploadedFile interface - add this to your interfaces section
-interface UploadedFile {
-  name: string
-  size: number
-  uploadDate: string
-  status: 'uploaded' | 'processing' | 'ready'
-  upload_id?: string 
-}
+  // Updated handleFileUpload with localStorage tracking
+  const handleFileUpload = async (files: FileList) => {
+    if (!files || files.length === 0) return
 
-// Updated handleFileUpload function
-const handleFileUpload = async (files: FileList) => {
-  if (!files || files.length === 0) return
-
-  const file = files[0]
-  if (!file.name.match(/\.(xlsx|xls)$/i)) {
-    const errorMsg: Message = {
-      role: 'assistant',
-      content: 'Please upload an Excel file (.xlsx or .xls format) for revenue analysis. / برا کرم revenue analysis کے لیے Excel فائل اپ لوڈ کریں (.xlsx یا .xls format)',
-      timestamp: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, errorMsg])
-    return
-  }
-
-  setIsUploading(true)
-  
-  try {
-    // Create FormData for FastAPI backend
-    const formData = new FormData()
-    formData.append('file', file) // FastAPI expects 'file' parameter
-
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 120000) // 2 minutes timeout
-
-    const response = await fetch(uploadWebhookUrl, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal
-    })
-
-    clearTimeout(timeoutId)
-
-    if (!response.ok) {
-      throw new Error(`Upload failed: ${response.statusText}`)
-    }
-
-    const result = await response.json()
-    console.log('Upload result:', result) // For debugging
-    
-    const newFile: UploadedFile = {
-      name: file.name,
-      size: file.size,
-      uploadDate: new Date().toISOString(),
-      status: 'ready',
-      upload_id: result.upload_id // Store the upload_id from backend
-    }
-    
-    setUploadedFiles(prev => [...prev, newFile])
-    
-    const successMsg: Message = {
-      role: 'assistant',
-      content: `Perfect! I've successfully processed your Excel file "${file.name}" for revenue analysis. You can now ask me questions in **English** or **Roman Urdu**.\n\nWhat would you like to explore first?`,
-      timestamp: new Date().toISOString()
-    }
-    
-    setMessages(prev => [...prev, successMsg])
-    
-  } catch (error: unknown) {
-    let errorMessage = 'Failed to upload file. Please try again. / فائل اپ لوڈ نہیں ہو سکی۔ برا کرم دوبارہ کوشش کریں۔'
-    
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        errorMessage = 'Upload timed out. Please try again. / اپ لوڈ کا وقت ختم ہو گیا۔ برا کرم دوبارہ کوشش کریں۔'
-      } else if (error.message) {
-        errorMessage = `Upload failed: ${error.message}`
+    const file = files[0]
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: 'Please upload an Excel file (.xlsx or .xls format) for revenue analysis.',
+        timestamp: new Date().toISOString()
       }
+      setMessages(prev => [...prev, errorMsg])
+      return
     }
+
+    setIsUploading(true)
     
-    const errorMsg: Message = {
-      role: 'assistant',
-      content: errorMessage,
-      timestamp: new Date().toISOString()
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 120000)
+
+      const response = await fetch(uploadWebhookUrl, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      console.log('Upload result:', result)
+      
+      const newFile: UploadedFile = {
+        name: file.name,
+        size: file.size,
+        uploadDate: new Date().toISOString(),
+        status: 'ready',
+        upload_id: result.upload_id
+      }
+      
+      setUploadedFiles(prev => [...prev, newFile])
+      
+      // 🔥 SAVE upload_id to localStorage for cleanup on refresh
+      if (result.upload_id) {
+        localStorage.setItem('current_upload_id', result.upload_id)
+        localStorage.setItem('uploaded_files', JSON.stringify([newFile]))
+        console.log('💾 Saved upload_id to localStorage:', result.upload_id)
+      }
+      
+      const successMsg: Message = {
+        role: 'assistant',
+        content: `Perfect! I've successfully processed your Excel file "${file.name}" for revenue analysis. You can now ask me questions in **English** or **Roman Urdu**.\n\nWhat would you like to explore first?`,
+        timestamp: new Date().toISOString()
+      }
+      
+      setMessages(prev => [...prev, successMsg])
+      
+    } catch (error: unknown) {
+      let errorMessage = 'Failed to upload file. Please try again.'
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          errorMessage = 'Upload timed out. Please try again.'
+        } else if (error.message) {
+          errorMessage = `Upload failed: ${error.message}`
+        }
+      }
+      
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: errorMessage,
+        timestamp: new Date().toISOString()
+      }
+      
+      setMessages(prev => [...prev, errorMsg])
+    } finally {
+      setIsUploading(false)
     }
-    
-    setMessages(prev => [...prev, errorMsg])
-  } finally {
-    setIsUploading(false)
   }
-}
-
-
-
-
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -246,187 +302,174 @@ const handleFileUpload = async (files: FileList) => {
     }
   }
 
-
-
-// Updated removeFile with loading state
-const removeFile = async (index: number) => {
-  const file = uploadedFiles[index]
-  
-  if (!file.upload_id) {
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
-    return
-  }
-
-  setIsDeletingFile(index)
-
-  try {
-    const response = await fetch(`http://localhost:8000/api/upload/${file.upload_id}`, {
-      method: 'DELETE'
-    })
-
-    if (!response.ok) {
-      throw new Error(`Failed to delete: ${response.statusText}`)
+  // Updated removeFile with localStorage cleanup
+  const removeFile = async (index: number) => {
+    const file = uploadedFiles[index]
+    
+    if (!file.upload_id) {
+      setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+      return
     }
 
-    const result = await response.json()
-    
-    // Remove from state
-    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
-    
-    // IMPORTANT: Clear the file input refs
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-    if (sidebarFileInputRef.current) {
-      sidebarFileInputRef.current.value = ''
-    }
-    
-    // Reset messages with SUCCESS message
-    setMessages([
-      {
+    setIsDeletingFile(index)
+
+    try {
+      const response = await fetch(`${deleteApiUrl}/${file.upload_id}`, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      
+      // Remove from state
+      setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+      
+      // 🔥 CLEAR localStorage
+      localStorage.removeItem('current_upload_id')
+      localStorage.removeItem('uploaded_files')
+      console.log('🗑️ Cleared localStorage after manual delete')
+      
+      // Clear file inputs
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      if (sidebarFileInputRef.current) {
+        sidebarFileInputRef.current.value = ''
+      }
+      
+      // Reset messages
+      setMessages([
+        {
+          role: 'assistant',
+          content: "Hello! I'm **Pulse AI**, your Avanza Solutions assistant. \nI can help you with:\n\n**Revenue Analysis:**\n• Upload Excel files for financial analysis\n• Revenue trends and performance metrics\n• Bilingual support (English & Roman Urdu)\n\nHow can I assist you today?",
+          timestamp: new Date().toISOString()
+        },
+        {
+          role: 'assistant',
+          content: `File "${file.name}" has been successfully deleted. You can upload a new file to start fresh analysis.`,
+          timestamp: new Date().toISOString()
+        }
+      ])
+      
+      setConversationHistory([])
+      setIsSidebarOpen(false)
+
+    } catch (error: unknown) {
+      console.error('Delete error:', error)
+      
+      const errorMsg: Message = {
         role: 'assistant',
-        content: "Hello! I'm **Pulse AI**, your Avanza Solutions assistant. \nI can help you with:\n\n**Revenue Analysis:**\n• Upload Excel files for financial analysis\n• Revenue trends and performance metrics\n• Bilingual support (English & Roman Urdu)\n\nHow can I assist you today?",
+        content: 'Failed to delete file. Please try again.',
         timestamp: new Date().toISOString()
-      },
-      {
+      }
+      setMessages(prev => [...prev, errorMsg])
+    } finally {
+      setIsDeletingFile(null)
+    }
+  }
+
+  const sendMessage = async () => {
+    const message = inputValue.trim()
+    if (!message || isLoading) return
+
+    const currentFile = uploadedFiles.find(f => f.upload_id)
+    if (!currentFile?.upload_id) {
+      const errorMsg: Message = {
         role: 'assistant',
-        content: `File "${file.name}" has been successfully deleted. You can upload a new file to start fresh analysis.`,
+        content: 'Please upload an Excel file first before asking questions.',
         timestamp: new Date().toISOString()
       }
-    ])
-    
-    setConversationHistory([])
-    
-    // Close sidebar after deletion
-    setIsSidebarOpen(false)
-
-  } catch (error: unknown) {
-    console.error('Delete error:', error)
-    
-    const errorMsg: Message = {
-      role: 'assistant',
-      content: 'Failed to delete file. Please try again.',
-      timestamp: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, errorMsg])
-  } finally {
-    setIsDeletingFile(null)
-  }
-}
-
-
-
-
-  
-// Updated sendMessage function
-const sendMessage = async () => {
-  const message = inputValue.trim()
-  if (!message || isLoading) return
-
-  // Check if we have an uploaded file with upload_id
-  const currentFile = uploadedFiles.find(f => f.upload_id)
-  if (!currentFile?.upload_id) {
-    const errorMsg: Message = {
-      role: 'assistant',
-      content: 'Please upload an Excel file first before asking questions. / پہلے Excel فائل اپ لوڈ کریں پھر سوالات پوچھیں۔',
-      timestamp: new Date().toISOString()
-    }
-    setMessages(prev => [...prev, errorMsg])
-    return
-  }
-
-  try {
-    const userMessage: Message = {
-      role: 'user',
-      content: message,
-      timestamp: new Date().toISOString()
-    }
-    
-    setMessages(prev => [...prev, userMessage])
-    setInputValue('')
-    setIsLoading(true)
-
-    // Format the request for FastAPI backend
-    const requestData = {
-      message: message,
-      timestamp: new Date().toISOString()
+      setMessages(prev => [...prev, errorMsg])
+      return
     }
 
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 45000) // 45 seconds timeout
-
-    // Use the upload_id from the uploaded file
-    const response = await fetch(`${chatWebhookUrl}/${currentFile.upload_id}`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify(requestData),
-      signal: controller.signal
-    })
-
-    clearTimeout(timeoutId)
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-
-    const result = await response.json()
-    console.log('Chat result:', result) // For debugging
-    
-    // Extract response from FastAPI backend
-    const aiResponse = result.response || result.message || 'I received your message but had trouble formatting a response. Please try again.'
-    
-    const aiMessage: Message = {
-      role: 'assistant',
-      content: aiResponse,
-      timestamp: new Date().toISOString()
-    }
-    
-    setMessages(prev => [...prev, aiMessage])
-    
-    // Update conversation history
-    const newHistory: ConversationHistoryItem[] = [
-      ...conversationHistory,
-      { role: 'user', content: message, timestamp: userMessage.timestamp },
-      { role: 'assistant', content: aiResponse, timestamp: aiMessage.timestamp }
-    ]
-    
-    setConversationHistory(newHistory.slice(-20)) // Keep last 20 exchanges
-    
-  } catch (error: unknown) {
-    let errorMessage = 'Unable to connect to Pulse AI. Please try again. / Pulse AI سے رابطہ نہیں ہو سکا۔ برا کرم دوبارہ کوشش کریں۔'
-    
-    if (error instanceof Error) {
-      if (error.name === 'AbortError') {
-        errorMessage = 'Request timed out. Please try again. / درخواست کا وقت ختم ہو گیا۔ برا کرم دوبارہ کوشش کریں۔'
-      } else if (error.message) {
-        errorMessage = `Unable to connect to Pulse AI: ${error.message}`
+    try {
+      const userMessage: Message = {
+        role: 'user',
+        content: message,
+        timestamp: new Date().toISOString()
       }
-    }
-    
-    const errorMsg: Message = {
-      role: 'assistant',
-      content: errorMessage,
-      timestamp: new Date().toISOString()
-    }
-    
-    setMessages(prev => [...prev, errorMsg])
-  } finally {
-    setIsLoading(false)
-    
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus()
+      
+      setMessages(prev => [...prev, userMessage])
+      setInputValue('')
+      setIsLoading(true)
+
+      const requestData = {
+        message: message,
+        timestamp: new Date().toISOString()
       }
-    }, 150)
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 45000)
+
+      const response = await fetch(`${chatWebhookUrl}/${currentFile.upload_id}`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(requestData),
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      console.log('Chat result:', result)
+      
+      const aiResponse = result.response || result.message || 'I received your message but had trouble formatting a response. Please try again.'
+      
+      const aiMessage: Message = {
+        role: 'assistant',
+        content: aiResponse,
+        timestamp: new Date().toISOString()
+      }
+      
+      setMessages(prev => [...prev, aiMessage])
+      
+      const newHistory: ConversationHistoryItem[] = [
+        ...conversationHistory,
+        { role: 'user', content: message, timestamp: userMessage.timestamp },
+        { role: 'assistant', content: aiResponse, timestamp: aiMessage.timestamp }
+      ]
+      
+      setConversationHistory(newHistory.slice(-20))
+      
+    } catch (error: unknown) {
+      let errorMessage = 'Unable to connect to Pulse AI. Please try again.'
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          errorMessage = 'Request timed out. Please try again.'
+        } else if (error.message) {
+          errorMessage = `Unable to connect to Pulse AI: ${error.message}`
+        }
+      }
+      
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: errorMessage,
+        timestamp: new Date().toISOString()
+      }
+      
+      setMessages(prev => [...prev, errorMsg])
+    } finally {
+      setIsLoading(false)
+      
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus()
+        }
+      }, 150)
+    }
   }
-}
-
-
-
-
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -436,11 +479,10 @@ const sendMessage = async () => {
   }
 
   const renderMessageContent = (content: string) => {
-    // Enhanced markdown-like formatting with better support for multilingual content
     const formattedContent = content
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      .replace(/•/g, '•') // Ensure bullet points render correctly
+      .replace(/•/g, '•')
       .split('\n').map((line, i) => (
         <span key={i}>
           <span dangerouslySetInnerHTML={{ __html: line }} />
@@ -489,7 +531,6 @@ const sendMessage = async () => {
         isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
       }`}>
         <div className="w-80 h-full bg-white/95 backdrop-blur-sm shadow-lg border-r border-gray-200">
-          {/* Sidebar Header */}
           <div className="h-16 px-4 flex items-center justify-between border-b border-gray-200">
             <h2 className="text-lg font-semibold text-gray-800">Files</h2>
             <button
@@ -500,9 +541,7 @@ const sendMessage = async () => {
             </button>
           </div>
           
-          {/* Sidebar Content */}
           <div className="flex-1 p-4 overflow-y-auto sidebar-scroll" style={{ height: 'calc(100vh - 64px)' }}>
-            {/* Upload Area */}
             <div 
               className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
                 isDragOver 
@@ -531,7 +570,6 @@ const sendMessage = async () => {
               className="hidden"
             />
             
-            {/* Files List */}
             <div className="mt-6">
               <h3 className="text-sm font-medium text-gray-700 mb-3">
                 Revenue Files ({uploadedFiles.length})
@@ -565,17 +603,17 @@ const sendMessage = async () => {
                           </div>
                         </div>
                         <button
-  onClick={() => removeFile(index)}
-  disabled={isDeletingFile === index}
-  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ml-2 transition-colors ${
-    isDeletingFile === index
-      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-      : 'hover:bg-red-100 text-red-500'
-  }`}
-  title="Remove file"
->
-  {isDeletingFile === index ? '⏳' : '✕'}
-</button>
+                          onClick={() => removeFile(index)}
+                          disabled={isDeletingFile === index}
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ml-2 transition-colors ${
+                            isDeletingFile === index
+                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                              : 'hover:bg-red-100 text-red-500'
+                          }`}
+                          title="Remove file"
+                        >
+                          {isDeletingFile === index ? '⏳' : '✕'}
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -586,7 +624,6 @@ const sendMessage = async () => {
         </div>
       </div>
       
-      {/* Sidebar Overlay */}
       {isSidebarOpen && (
         <div 
           className="fixed inset-0 bg-black/20 z-20"
@@ -594,10 +631,9 @@ const sendMessage = async () => {
         />
       )}
       
-      {/* Header - Fixed like reference */}
+      {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-sm px-6 py-4 flex items-center justify-between shadow-sm h-16">
         <div className="flex items-center gap-4">
-          {/* Sidebar Toggle */}
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="w-8 h-8 rounded-lg hover:bg-gray-200 flex items-center justify-center transition-colors"
@@ -631,13 +667,9 @@ const sendMessage = async () => {
         </div>
       </header>
 
-      {/* Main Content with proper margin for fixed header */}
+      {/* Main Content */}
       <div className="flex-1 flex flex-col h-screen mt-16 no-scrollbar">
-        
-        {/* Chat Container - Like reference */}
         <div className="flex-1 flex flex-col px-6 relative z-10 min-h-0 overflow-hidden">
-          
-          {/* Messages Container - Scrollable with proper spacing and updated scrollbar */}
           <div 
             ref={messagesContainerRef}
             className="flex-1 py-4 overflow-y-auto flex flex-col gap-4 relative z-10 custom-scrollbar"
@@ -647,7 +679,6 @@ const sendMessage = async () => {
             }}
           >
             <div className="max-w-5xl mx-auto w-full flex flex-col gap-4">
-              
               {messages.map((message, index) => {
                 const isLastMessage = index === messages.length - 1
                 
@@ -691,7 +722,6 @@ const sendMessage = async () => {
                 )
               })}
               
-              {/* Typing Indicator */}
               {isLoading && (
                 <div ref={lastMessageRef} className="relative z-30">
                   <TypingIndicator />
@@ -702,7 +732,7 @@ const sendMessage = async () => {
             </div>
           </div>
 
-          {/* Input Container - Fixed bottom like reference */}
+          {/* Input Container */}
           <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-sm p-6 border-t border-gray-200/50 shadow-lg">
             <div className="max-w-5xl mx-auto">
               <div className="flex items-center bg-transparent border border-pink-600 rounded-full px-4 py-3 gap-4">
@@ -719,7 +749,6 @@ const sendMessage = async () => {
                   style={{ border: 'none', boxShadow: 'none' }}
                 />
                 
-                {/* File Upload Button */}
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploading}
@@ -736,7 +765,6 @@ const sendMessage = async () => {
                   className="hidden"
                 />
                 
-                {/* Send Button */}
                 <button
                   onClick={sendMessage}
                   disabled={!inputValue.trim() || isLoading}
