@@ -63,66 +63,32 @@ export default function Home() {
   // 🔥 AUTO-CLEANUP ON PAGE REFRESH/LOAD
   // =============================================================================
   useEffect(() => {
-    const cleanupOnPageLoad = async () => {
-      try {
-        // Get stored upload_id from localStorage
-        const storedUploadId = localStorage.getItem('current_upload_id')
-        
-        if (storedUploadId) {
-          console.log('🧹 Cleaning up previous session:', storedUploadId)
-          
-          // Delete the old data from backend
-          try {
-            const response = await fetch(`${deleteApiUrl}/${storedUploadId}`, {
-              method: 'DELETE'
-            })
-            
-            if (response.ok) {
-              console.log('✅ Previous session cleaned up successfully')
-            } else {
-              console.warn('⚠️ Cleanup response not OK:', response.statusText)
-            }
-          } catch (error) {
-            console.warn('⚠️ Cleanup failed (might be expected):', error)
-          }
-          
-          // Clear localStorage
-          localStorage.removeItem('current_upload_id')
-          localStorage.removeItem('uploaded_files')
-          console.log('✅ localStorage cleared')
-        } else {
-          console.log('ℹ️ No previous session to clean up')
-        }
-        
-        // Always clear any leftover localStorage data
-        localStorage.removeItem('current_upload_id')
-        localStorage.removeItem('uploaded_files')
-        
-      } catch (error) {
-        console.error('Error during cleanup:', error)
+  const cleanupOnPageLoad = async () => {
+    try {
+      console.log('🧹 Performing full backend cleanup...')
+      const response = await fetch('http://localhost:8000/api/cleanup', {
+        method: 'DELETE',
+      })
+
+      if (response.ok) {
+        console.log('✅ All Supabase tables cleared successfully')
+      } else {
+        console.warn('⚠️ Cleanup failed:', response.statusText)
       }
+
+      // Always clear localStorage
+      localStorage.removeItem('current_upload_id')
+      localStorage.removeItem('uploaded_files')
+    } catch (error) {
+      console.error('❌ Error during cleanup:', error)
     }
-    
-    // Run cleanup on component mount (page load/refresh)
-    cleanupOnPageLoad()
-    
-    // Optional: Cleanup on page unload (when user leaves)
-    const handleBeforeUnload = async () => {
-      const storedUploadId = localStorage.getItem('current_upload_id')
-      if (storedUploadId) {
-        // Use sendBeacon for reliable cleanup on page unload
-        const blob = new Blob([JSON.stringify({})], { type: 'application/json' })
-        navigator.sendBeacon(`${deleteApiUrl}/${storedUploadId}`, blob)
-      }
-    }
-    
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, []) // Empty dependency array = runs once on mount
-  
+  }
+
+  // Run cleanup on component mount (page load/refresh)
+  cleanupOnPageLoad()
+}, [])
+
+
   // =============================================================================
 
   // Simple, reliable scrolling
