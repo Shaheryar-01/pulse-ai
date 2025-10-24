@@ -32,7 +32,7 @@ interface UploadedFile {
 }
 
 export default function Home() {
-  const [isDeletingFile, setIsDeletingFile] = useState<number | null>(null)
+  const [isDeletingFile, setIsDeletingFile] = useState(false)
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -43,10 +43,11 @@ export default function Home() {
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [conversationHistory, setConversationHistory] = useState<ConversationHistoryItem[]>([])
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [showUploadTooltip, setShowUploadTooltip] = useState(false)
   
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -162,9 +163,20 @@ export default function Home() {
     return 'I received your message but had trouble formatting a response. Please try again.'
   }
 
-  // Updated handleFileUpload with localStorage tracking
+  // 🔥 MODIFIED: Block upload if file already exists
   const handleFileUpload = async (files: FileList) => {
     if (!files || files.length === 0) return
+
+    // 🔥 NEW: Block upload if file already exists
+    if (uploadedFile) {
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: '⚠️ Please delete the current file before uploading a new one. You can only work with one file at a time.',
+        timestamp: new Date().toISOString()
+      }
+      setMessages(prev => [...prev, errorMsg])
+      return
+    }
 
     const file = files[0]
     if (!file.name.match(/\.(xlsx|xls)$/i)) {
@@ -209,12 +221,12 @@ export default function Home() {
         upload_id: result.upload_id
       }
       
-      setUploadedFiles(prev => [...prev, newFile])
+      setUploadedFile(newFile)
       
       // 🔥 SAVE upload_id to localStorage for cleanup on refresh
       if (result.upload_id) {
         localStorage.setItem('current_upload_id', result.upload_id)
-        localStorage.setItem('uploaded_files', JSON.stringify([newFile]))
+        localStorage.setItem('uploaded_files', JSON.stringify(newFile))
         console.log('💾 Saved upload_id to localStorage:', result.upload_id)
       }
       
@@ -251,7 +263,10 @@ export default function Home() {
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
-    setIsDragOver(true)
+    // 🔥 NEW: Don't show drag effect if file already exists
+    if (!uploadedFile) {
+      setIsDragOver(true)
+    }
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -262,41 +277,49 @@ export default function Home() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
+    
+    // 🔥 NEW: Block drop if file already exists
+    if (uploadedFile) {
+      const errorMsg: Message = {
+        role: 'assistant',
+        content: '⚠️ Please delete the current file before uploading a new one.',
+        timestamp: new Date().toISOString()
+      }
+      setMessages(prev => [...prev, errorMsg])
+      return
+    }
+    
     const files = e.dataTransfer.files
     if (files) {
       handleFileUpload(files)
     }
   }
 
-  // Updated removeFile with localStorage cleanup
-  const removeFile = async (index: number) => {
-    const file = uploadedFiles[index]
+  const removeFile = async () => {
+    if (!uploadedFile) return
     
-    if (!file.upload_id) {
-      setUploadedFiles(prev => prev.filter((_, i) => i !== index))
-      return
-    }
-
-    setIsDeletingFile(index)
+    setIsDeletingFile(true)
 
     try {
-      const response = await fetch(`${deleteApiUrl}/${file.upload_id}`, {
+      console.log('🧹 Deleting data from database...')
+      
+      const response = await fetch('http://localhost:8000/api/cleanup', {
         method: 'DELETE'
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to delete: ${response.statusText}`)
+        throw new Error(`Failed to cleanup: ${response.statusText}`)
       }
 
       const result = await response.json()
+      console.log('✅ Data cleared:', result)
       
-      // Remove from state
-      setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+      setUploadedFile(null)
       
-      // 🔥 CLEAR localStorage
+      // Clear localStorage
       localStorage.removeItem('current_upload_id')
       localStorage.removeItem('uploaded_files')
-      console.log('🗑️ Cleared localStorage after manual delete')
+      console.log('🗑️ Cleared localStorage')
       
       // Clear file inputs
       if (fileInputRef.current) {
@@ -306,7 +329,7 @@ export default function Home() {
         sidebarFileInputRef.current.value = ''
       }
       
-      // Reset messages
+      // Reset messages to initial state
       setMessages([
         {
           role: 'assistant',
@@ -315,25 +338,28 @@ export default function Home() {
         },
         {
           role: 'assistant',
-          content: `File "${file.name}" has been successfully deleted. You can upload a new file to start fresh analysis.`,
+          content: `File has been removed. You can upload a new file to start fresh analysis.`,
           timestamp: new Date().toISOString()
         }
       ])
       
+      // Clear conversation history
       setConversationHistory([])
+      
+      // Close sidebar
       setIsSidebarOpen(false)
 
     } catch (error: unknown) {
-      console.error('Delete error:', error)
+      console.error('Cleanup error:', error)
       
       const errorMsg: Message = {
         role: 'assistant',
-        content: 'Failed to delete file. Please try again.',
+        content: 'Failed to clear data. Please try refreshing the page.',
         timestamp: new Date().toISOString()
       }
       setMessages(prev => [...prev, errorMsg])
     } finally {
-      setIsDeletingFile(null)
+      setIsDeletingFile(false)
     }
   }
 
@@ -341,8 +367,7 @@ export default function Home() {
     const message = inputValue.trim()
     if (!message || isLoading) return
 
-    const currentFile = uploadedFiles.find(f => f.upload_id)
-    if (!currentFile?.upload_id) {
+    if (!uploadedFile?.upload_id) {
       const errorMsg: Message = {
         role: 'assistant',
         content: 'Please upload an Excel file first before asking questions.',
@@ -371,7 +396,7 @@ export default function Home() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 45000)
 
-      const response = await fetch(`${chatWebhookUrl}/${currentFile.upload_id}`, {
+      const response = await fetch(`${chatWebhookUrl}/${uploadedFile.upload_id}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -508,24 +533,32 @@ export default function Home() {
           </div>
           
           <div className="flex-1 p-4 overflow-y-auto sidebar-scroll" style={{ height: 'calc(100vh - 64px)' }}>
+            {/* 🔥 MODIFIED: Disable upload area if file exists */}
             <div 
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer ${
-                isDragOver 
-                  ? 'border-pink-600 bg-pink-50' 
-                  : 'border-gray-300 hover:border-pink-400 hover:bg-gray-50'
+              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                uploadedFile 
+                  ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-60' 
+                  : isDragOver 
+                    ? 'border-pink-600 bg-pink-50 cursor-pointer' 
+                    : 'border-gray-300 hover:border-pink-400 hover:bg-gray-50 cursor-pointer'
               }`}
-              onClick={() => sidebarFileInputRef.current?.click()}
+              onClick={() => !uploadedFile && sidebarFileInputRef.current?.click()}
+              title={uploadedFile ? 'Delete current file before uploading another' : 'Upload Excel file'}
             >
-              <div className="text-3xl mb-2">📊</div>
-              <p className="text-sm text-gray-600 mb-2">
-                <strong>Upload Excel File</strong>
+              <div className="text-3xl mb-2">{uploadedFile ? '🔒' : '📊'}</div>
+              <p className={`text-sm mb-2 ${uploadedFile ? 'text-gray-500' : 'text-gray-600'}`}>
+                <strong>{uploadedFile ? 'Upload Disabled' : 'Upload Excel File'}</strong>
               </p>
               <p className="text-xs text-gray-500">
-                Click here or drag & drop
+                {uploadedFile 
+                  ? 'Delete current file to upload new one' 
+                  : 'Click here or drag & drop'}
               </p>
-              <p className="text-xs text-gray-400 mt-1">
-                .xlsx, .xls files only
-              </p>
+              {!uploadedFile && (
+                <p className="text-xs text-gray-400 mt-1">
+                  .xlsx, .xls files only
+                </p>
+              )}
             </div>
             
             <input
@@ -534,55 +567,52 @@ export default function Home() {
               accept=".xlsx,.xls"
               onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
               className="hidden"
+              disabled={!!uploadedFile}
             />
             
             <div className="mt-6">
               <h3 className="text-sm font-medium text-gray-700 mb-3">
-                Revenue Files ({uploadedFiles.length})
+                Current File {uploadedFile ? '(1)' : '(0)'}
               </h3>
               
-              {uploadedFiles.length === 0 ? (
+              {!uploadedFile ? (
                 <div className="text-center py-8 text-gray-500">
                   <div className="text-2xl mb-2">📁</div>
-                  <p className="text-sm">No files uploaded yet</p>
+                  <p className="text-sm">No file uploaded yet</p>
                   <p className="text-xs mt-1">Upload an Excel file to get started</p>
                 </div>
               ) : (
-                <div className="space-y-3">
-                  {uploadedFiles.map((file, index) => (
-                    <div key={index} className="bg-gray-50 rounded-lg p-3 border">
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3 flex-1 min-w-0">
-                          <div className="text-lg">📊</div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-gray-800 text-sm truncate">
-                              {file.name}
-                            </div>
-                            <div className="text-xs text-gray-500 mt-1">
-                              {formatFileSize(file.size)} • {formatTime(file.uploadDate)}
-                            </div>
-                            <div className="mt-2">
-                              <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">
-                                Ready for analysis
-                              </span>
-                            </div>
-                          </div>
+                <div className="bg-gray-50 rounded-lg p-3 border">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className="text-lg">📊</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-800 text-sm truncate">
+                          {uploadedFile.name}
                         </div>
-                        <button
-                          onClick={() => removeFile(index)}
-                          disabled={isDeletingFile === index}
-                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ml-2 transition-colors ${
-                            isDeletingFile === index
-                              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                              : 'hover:bg-red-100 text-red-500'
-                          }`}
-                          title="Remove file"
-                        >
-                          {isDeletingFile === index ? '⏳' : '✕'}
-                        </button>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {formatFileSize(uploadedFile.size)} • {formatTime(uploadedFile.uploadDate)}
+                        </div>
+                        <div className="mt-2">
+                          <span className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded-full">
+                            Ready for analysis
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  ))}
+                    <button
+                      onClick={removeFile}
+                      disabled={isDeletingFile}
+                      className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ml-2 transition-colors ${
+                        isDeletingFile
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                          : 'hover:bg-red-100 text-red-500'
+                      }`}
+                      title="Remove file"
+                    >
+                      {isDeletingFile ? '⏳' : '✕'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -715,20 +745,41 @@ export default function Home() {
                   style={{ border: 'none', boxShadow: 'none' }}
                 />
                 
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                  className="w-9 h-9 bg-gray-100 text-gray-600 rounded-full flex items-center justify-center hover:bg-gray-200 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-base"
-                  title="Upload Excel file for revenue analysis"
-                >
-                  {isUploading ? '⏳' : '📎'}
-                </button>
+                {/* 🔥 MODIFIED: Show tooltip and disable when file exists */}
+                <div className="relative">
+                  <button
+                    onClick={() => !uploadedFile && fileInputRef.current?.click()}
+                    onMouseEnter={() => uploadedFile && setShowUploadTooltip(true)}
+                    onMouseLeave={() => setShowUploadTooltip(false)}
+                    disabled={isUploading || !!uploadedFile}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors text-base ${
+                      uploadedFile
+                        ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                        : isUploading
+                          ? 'bg-gray-300 cursor-not-allowed'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                    title={uploadedFile ? '' : 'Upload Excel file for revenue analysis'}
+                  >
+                    {isUploading ? '⏳' : uploadedFile ? '🔒' : '📎'}
+                  </button>
+                  
+                  {/* 🔥 NEW: Custom tooltip for disabled state */}
+                  {showUploadTooltip && uploadedFile && (
+                    <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap shadow-lg z-50">
+                      Delete current file before uploading another
+                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-1 border-4 border-transparent border-t-gray-800"></div>
+                    </div>
+                  )}
+                </div>
+                
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept=".xlsx,.xls"
                   onChange={(e) => e.target.files && handleFileUpload(e.target.files)}
                   className="hidden"
+                  disabled={!!uploadedFile}
                 />
                 
                 <button
