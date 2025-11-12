@@ -67,7 +67,7 @@ export default function Home() {
   const cleanupOnPageLoad = async () => {
     try {
       console.log('🧹 Performing full backend cleanup...')
-      const response = await fetch('http://localhost:8000/api/cleanup', {
+      const response = await fetch('https://f3d9e72a9841.ngrok-free.app/api/cleanup', {
         method: 'DELETE',
       })
 
@@ -303,7 +303,7 @@ export default function Home() {
     try {
       console.log('🧹 Deleting data from database...')
       
-      const response = await fetch('http://localhost:8000/api/cleanup', {
+      const response = await fetch('https://f3d9e72a9841.ngrok-free.app/api/cleanup', {
         method: 'DELETE'
       })
 
