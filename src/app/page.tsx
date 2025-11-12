@@ -56,9 +56,9 @@ export default function Home() {
   const sidebarFileInputRef = useRef<HTMLInputElement>(null)
   
   // API URLs
-  const chatWebhookUrl = 'https://f3d9e72a9841.ngrok-free.app/chat'
-  const uploadWebhookUrl = 'https://f3d9e72a9841.ngrok-free.app/upload'
-  const deleteApiUrl = 'https://f3d9e72a9841.ngrok-free.app/upload'
+  const chatWebhookUrl = 'https://f3d9e72a9841.ngrok-free.app/webhook/chat'
+  const uploadWebhookUrl = 'https://f3d9e72a9841.ngrok-free.app/webhook/upload'
+  const deleteApiUrl = 'https://f3d9e72a9841.ngrok-free.app/api/upload'
 
   // =============================================================================
   // 🔥 AUTO-CLEANUP ON PAGE REFRESH/LOAD
